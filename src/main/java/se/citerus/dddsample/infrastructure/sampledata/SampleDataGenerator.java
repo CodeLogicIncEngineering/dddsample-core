@@ -67,7 +67,13 @@ public class SampleDataGenerator  {
             @Override
             protected void doInTransactionWithoutResult(TransactionStatus status) {
                 for (Location location : SampleLocations.getAll()) {
-                    locationRepository.store(location);
+                    // Check if location already exists to avoid optimistic locking issues
+                    Location existing = locationRepository.find(location.unLocode());
+                    if (existing == null) {
+                        // Create a new instance to avoid Hibernate 7 optimistic locking issues with detached entities
+                        Location newLocation = new Location(location.unLocode(), location.name());
+                        locationRepository.store(newLocation);
+                    }
                 }
 
                 voyageRepository.store(HONGKONG_TO_NEW_YORK);
