@@ -8,6 +8,8 @@
   "baseBranchPatterns": ["codelogic"],
   "dependencyDashboardTitle": "Renovate Dashboard (codelogic dddsample-core)",
 
+  "forkProcessing": "enabled",
+
   "recreateWhen": "never",
   "rebaseWhen": "never",
   "semanticCommits": "disabled"
