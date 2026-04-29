@@ -1,32 +1,214 @@
 name: Java CI with Maven
 
-permissions:
-  contents: write
-
 on:
-  pull_request:
-    branches: [ "*" ]
+  # Run on any push/pull to a Renovate branch or release-3.6-codelogic
   push:
-    branches: [ "master" ]
+    branches:
+      #- renovate/**
+      - codelogic
+  pull_request:
+    branches:
+      - renovate/**
+      #- codelogic
+  # Allow manual runs
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  build-and-scan:
+    name: Build + CodeLogic Scan
     runs-on: ubuntu-latest
+    environment: CodeLogic Scan Env
+
+    env:
+      # Optional override if your agent image is not at ${CODELOGIC_HOST#*://}/codelogic_java:latest
+      CODELOGIC_AGENT_IMAGE: ${{ vars.CODELOGIC_AGENT_IMAGE }}
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up JDK 17
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # IMPORTANT: no Maven cache => avoid "No space left on device" on caching
+      - name: Resolve Java (.java-version or Maven compiler level)
+        id: java
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalize_java() {
+            local v="$1"
+            v="${v%%-*}"
+            v="${v%%+*}"
+            if [[ "$v" =~ ^1\.([0-9]+)$ ]]; then
+              echo "${BASH_REMATCH[1]}"
+            elif [[ "$v" =~ ^([0-9]+)(\.[0-9]+)*$ ]]; then
+              echo "${BASH_REMATCH[1]}"
+            else
+              echo ""
+            fi
+          }
+
+          for candidate in .java-version src/.java-version; do
+            if [ -f "$candidate" ]; then
+              raw=$(tr -d '\r\n\t ' < "$candidate" | head -c 64)
+              jv=$(normalize_java "$raw")
+              if [ -n "$jv" ]; then
+                echo "Using Java from ${candidate}: ${jv}"
+                echo "setup_mode=file" >> "$GITHUB_OUTPUT"
+                echo "java_version=${jv}" >> "$GITHUB_OUTPUT"
+                echo "java_version_file=${candidate}" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+          done
+
+          echo "No .java-version; deriving Java level from Maven POM compiler settings"
+          max=0
+          while IFS= read -r line; do
+            [ -z "${line:-}" ] && continue
+            n=$(normalize_java "$line")
+            [ -z "${n:-}" ] && continue
+            if [ "$n" -gt "$max" ]; then max=$n; fi
+          done < <(
+            {
+              grep -RhoP '<release>\K[0-9]+' --include='pom.xml' . 2>/dev/null || true
+              grep -RhoP '<maven\.compiler\.release>\K[0-9]+' --include='pom.xml' . 2>/dev/null || true
+              grep -RhoP '<java\.version>\K[^<]+' --include='pom.xml' . 2>/dev/null || true
+              grep -RhoP '<(source|target)>\K[0-9.]+' --include='pom.xml' . 2>/dev/null || true
+            }
+          )
+
+          if [ "$max" -eq 0 ]; then
+            echo "Could not determine Java version. Add .java-version or maven-compiler-plugin <release> (and related) in a pom.xml."
+            exit 1
+          fi
+
+          echo "Highest Java level from POMs: ${max}"
+          echo "setup_mode=pom" >> "$GITHUB_OUTPUT"
+          echo "java_version=${max}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK (no cache)
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: maven
-          server-id: github # Value of the distributionManagement/repository/id field of the pom.xml
-          settings-path: ${{ github.workspace }} # location for the settings.xml file
-      - name: Build with Maven
-        run: mvn -B compile
-      - name: Run tests
-        run: mvn -B test
-      # Uploads the full dependency graph to GitHub to improve the quality of Dependabot alerts this repository can receive
-      - name: Update dependency graph
-        uses: advanced-security/maven-dependency-submission-action@v4
-        continue-on-error: true # optional as this step consistently fails for forked repos by design
+          distribution: temurin
+          java-version: ${{ steps.java.outputs.java_version }}
+
+      - name: Build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/logs"
+          set -o pipefail
+          mvn -B -ntp clean install 2>&1 | tee "${GITHUB_WORKSPACE}/logs/build.log"
+
+      - name: Run CodeLogic Scan
+        env:
+          CODELOGIC_HOST: ${{ vars.CODELOGIC_HOST }}
+          AGENT_UUID: ${{ secrets.AGENT_UUID }}
+          AGENT_PASSWORD: ${{ secrets.AGENT_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKSPACE="${GITHUB_WORKSPACE:-${{ github.workspace }}}"
+          SCAN_MOUNT_PATH="$WORKSPACE"
+
+          if [[ -n "${CODELOGIC_AGENT_IMAGE:-}" ]]; then
+            IMAGE="${CODELOGIC_AGENT_IMAGE}"
+          else
+            REGISTRY="${CODELOGIC_HOST#https://}"
+            REGISTRY="${REGISTRY#http://}"
+            IMAGE="${REGISTRY}/codelogic_java:latest"
+          fi
+
+          docker run --pull always --rm \
+            -e CODELOGIC_HOST \
+            -e AGENT_UUID \
+            -e AGENT_PASSWORD \
+            -v "${SCAN_MOUNT_PATH}:/github/workspace" \
+            "${IMAGE}" \
+              analyze -t scan -p /github/workspace \
+                -a DDDSample \
+                -m se.citerus \
+                -s DDDSample \
+                --expunge-scan-sessions
+
+      - name: Send build info to CodeLogic
+        if: always()
+        env:
+          CODELOGIC_HOST: ${{ vars.CODELOGIC_HOST }}
+          AGENT_UUID: ${{ secrets.AGENT_UUID }}
+          AGENT_PASSWORD: ${{ secrets.AGENT_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/logs"
+          if [[ ! -f "${GITHUB_WORKSPACE}/logs/build.log" ]]; then
+            echo "No Maven build log was produced (a step may have failed before mvn)." \
+              > "${GITHUB_WORKSPACE}/logs/build.log"
+          fi
+
+          # GitHub job.status is lowercase; CodeLogic expects Jenkins-style labels (see send_build_info -t).
+          GH_STATUS="${{ job.status }}"
+          case "${GH_STATUS}" in
+            success)   BUILD_STATUS="SUCCESS" ;;
+            failure)   BUILD_STATUS="FAILURE" ;;
+            cancelled) BUILD_STATUS="CANCELLED" ;;
+            *)         BUILD_STATUS="${GH_STATUS^^}" ;;
+          esac
+
+          if [[ -n "${CODELOGIC_AGENT_IMAGE:-}" ]]; then
+            IMAGE="${CODELOGIC_AGENT_IMAGE}"
+          else
+            REGISTRY="${CODELOGIC_HOST#https://}"
+            REGISTRY="${REGISTRY#http://}"
+            IMAGE="${REGISTRY}/codelogic_java:latest"
+          fi
+
+          docker run --pull always --rm \
+            -v "${GITHUB_WORKSPACE}:/scan" \
+            "${IMAGE}" \
+              send_build_info \
+                --agent-uuid="${AGENT_UUID}" \
+                --agent-password="${AGENT_PASSWORD}" \
+                --server="${CODELOGIC_HOST}" \
+                --path=/scan \
+                --build-number="${{ github.run_number }}" \
+                --pipeline-system="GitHub Actions" \
+                --job-name="${{ github.repository }} — ${{ github.workflow }}" \
+                --build-status="${BUILD_STATUS}" \
+                --log-file=/scan/logs/build.log \
+                --log-lines=50000 \
+                --timeout=300 \
+                --verbose
+
+      - name: CodeLogic CI summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## CodeLogic CI"
+            echo ""
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| Repository | \`${{ github.repository }}\` |"
+            echo "| Workflow | \`${{ github.workflow }}\` |"
+            echo "| Run | ${{ github.run_id }} (attempt ${{ github.run_attempt }}) |"
+            echo "| Ref | \`${{ github.ref }}\` |"
+            echo "| SHA | \`${{ github.sha }}\` |"
+            echo "| JDK (resolved) | ${{ steps.java.outputs.java_version }} (${{ steps.java.outputs.setup_mode }}) |"
+            echo "| Job status | **${{ job.status }}** |"
+            echo ""
+            echo "Build log is sent to CodeLogic via \`send_build_info\` when credentials are configured."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload Maven log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maven-build-log
+          path: logs/build.log
+          if-no-files-found: ignore
+          retention-days: 14
