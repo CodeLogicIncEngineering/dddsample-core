@@ -73,14 +73,22 @@ public class SampleDataGenerator  {
                     return;
                 }
 
-                // Reset IDs of static voyage objects to avoid Hibernate 7 optimistic locking issues
-                resetEntityId(HONGKONG_TO_NEW_YORK);
-                resetEntityId(NEW_YORK_TO_DALLAS);
-                resetEntityId(DALLAS_TO_HELSINKI);
-                resetEntityId(HELSINKI_TO_HONGKONG);
-                resetEntityId(DALLAS_TO_HELSINKI_ALT);
+                // First, persist all unique locations to avoid cascade persist duplicates
+                for (Location location : SampleLocations.getAll()) {
+                    if (locationRepository.find(location.unLocode()) == null) {
+                        resetLocationId(location);
+                        locationRepository.store(location);
+                    }
+                }
 
-                // Save voyages with cascade persist for locations (only if they don't already exist)
+                // Reset IDs of voyages and carrier movements (not locations, as they're already persisted)
+                resetVoyageAndCarrierMovementIds(HONGKONG_TO_NEW_YORK);
+                resetVoyageAndCarrierMovementIds(NEW_YORK_TO_DALLAS);
+                resetVoyageAndCarrierMovementIds(DALLAS_TO_HELSINKI);
+                resetVoyageAndCarrierMovementIds(HELSINKI_TO_HONGKONG);
+                resetVoyageAndCarrierMovementIds(DALLAS_TO_HELSINKI_ALT);
+
+                // Save voyages (locations already persisted)
                 if (voyageRepository.find(HONGKONG_TO_NEW_YORK.voyageNumber()) == null) {
                     voyageRepository.store(HONGKONG_TO_NEW_YORK);
                 }
@@ -200,30 +208,44 @@ public class SampleDataGenerator  {
     }
 
     /**
-     * Resets the ID of an entity and all nested entities to 0 using reflection.
+     * Resets the ID of a Location entity to 0 using reflection.
      * This is needed to avoid Hibernate 7 optimistic locking issues with static entities
      * that retain IDs across ApplicationContext refreshes.
      */
-    private void resetEntityId(Object entity) {
-        if (entity == null) return;
+    private void resetLocationId(Location location) {
+        if (location == null) return;
 
         try {
-            // Reset ID of the entity itself
-            java.lang.reflect.Field idField = entity.getClass().getDeclaredField("id");
+            java.lang.reflect.Field idField = location.getClass().getDeclaredField("id");
             idField.setAccessible(true);
-            idField.setLong(entity, 0);
+            idField.setLong(location, 0);
+        } catch (Exception e) {
+            log.warn("Failed to reset Location ID", e);
+        }
+    }
 
-            // Reset IDs of nested entities (CarrierMovements in Voyage, Locations in CarrierMovement)
-            if (entity instanceof se.citerus.dddsample.domain.model.voyage.Voyage) {
-                se.citerus.dddsample.domain.model.voyage.Voyage voyage = (se.citerus.dddsample.domain.model.voyage.Voyage) entity;
-                for (se.citerus.dddsample.domain.model.voyage.CarrierMovement cm : voyage.schedule().carrierMovements()) {
-                    resetEntityId(cm);
-                    resetEntityId(cm.departureLocation());
-                    resetEntityId(cm.arrivalLocation());
-                }
+    /**
+     * Resets the IDs of a Voyage and its CarrierMovements (but NOT Locations) to 0 using reflection.
+     * This is needed to avoid Hibernate 7 optimistic locking issues with static entities.
+     * Locations are NOT reset as they should already be persisted separately.
+     */
+    private void resetVoyageAndCarrierMovementIds(se.citerus.dddsample.domain.model.voyage.Voyage voyage) {
+        if (voyage == null) return;
+
+        try {
+            // Reset Voyage ID
+            java.lang.reflect.Field idField = voyage.getClass().getDeclaredField("id");
+            idField.setAccessible(true);
+            idField.setLong(voyage, 0);
+
+            // Reset CarrierMovement IDs (but NOT Location IDs)
+            for (se.citerus.dddsample.domain.model.voyage.CarrierMovement cm : voyage.schedule().carrierMovements()) {
+                java.lang.reflect.Field cmIdField = cm.getClass().getDeclaredField("id");
+                cmIdField.setAccessible(true);
+                cmIdField.setLong(cm, 0);
             }
         } catch (Exception e) {
-            log.warn("Failed to reset entity ID for " + entity.getClass().getSimpleName(), e);
+            log.warn("Failed to reset Voyage and CarrierMovement IDs", e);
         }
     }
 }
