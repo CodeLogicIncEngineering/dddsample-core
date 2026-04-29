@@ -21,11 +21,11 @@ public final class CarrierMovement implements ValueObject<CarrierMovement> {
   @GeneratedValue(strategy = GenerationType.AUTO)
   private long id;
 
-  @ManyToOne(fetch = FetchType.EAGER)
+  @ManyToOne(fetch = FetchType.EAGER, cascade = CascadeType.PERSIST)
   @JoinColumn(name = "arrival_location_id", nullable = false)
   private Location arrivalLocation;
 
-  @ManyToOne(fetch = FetchType.EAGER)
+  @ManyToOne(fetch = FetchType.EAGER, cascade = CascadeType.PERSIST)
   @JoinColumn(name = "departure_location_id", nullable = false)
   private Location departureLocation;
 

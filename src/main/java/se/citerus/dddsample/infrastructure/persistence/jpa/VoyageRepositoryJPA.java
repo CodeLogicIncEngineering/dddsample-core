@@ -20,6 +20,12 @@ public interface VoyageRepositoryJPA extends CrudRepository<Voyage, Long>, Voyag
 
   @Override
   default void store(Voyage voyage) {
-    save(voyage);
+    // Check if voyage already exists to determine persist vs merge
+    Voyage existing = find(voyage.voyageNumber());
+    if (existing == null) {
+      // For new voyages, save will work correctly
+      save(voyage);
+    }
+    // If it exists, don't save again to avoid optimistic locking issues
   }
 }

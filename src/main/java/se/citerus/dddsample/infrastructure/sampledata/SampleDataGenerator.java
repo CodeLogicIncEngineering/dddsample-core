@@ -66,21 +66,36 @@ public class SampleDataGenerator  {
         tt.execute(new TransactionCallbackWithoutResult() {
             @Override
             protected void doInTransactionWithoutResult(TransactionStatus status) {
-                for (Location location : SampleLocations.getAll()) {
-                    // Check if location already exists to avoid optimistic locking issues
-                    Location existing = locationRepository.find(location.unLocode());
-                    if (existing == null) {
-                        // Create a new instance to avoid Hibernate 7 optimistic locking issues with detached entities
-                        Location newLocation = new Location(location.unLocode(), location.name());
-                        locationRepository.store(newLocation);
-                    }
+                // Check if sample data already exists to avoid re-running on application context refresh
+                Cargo existingCargo = cargoRepository.find(new TrackingId("ABC123"));
+                if (existingCargo != null) {
+                    log.info("Sample data already exists, skipping data generation");
+                    return;
                 }
 
-                voyageRepository.store(HONGKONG_TO_NEW_YORK);
-                voyageRepository.store(NEW_YORK_TO_DALLAS);
-                voyageRepository.store(DALLAS_TO_HELSINKI);
-                voyageRepository.store(HELSINKI_TO_HONGKONG);
-                voyageRepository.store(DALLAS_TO_HELSINKI_ALT);
+                // Reset IDs of static voyage objects to avoid Hibernate 7 optimistic locking issues
+                resetEntityId(HONGKONG_TO_NEW_YORK);
+                resetEntityId(NEW_YORK_TO_DALLAS);
+                resetEntityId(DALLAS_TO_HELSINKI);
+                resetEntityId(HELSINKI_TO_HONGKONG);
+                resetEntityId(DALLAS_TO_HELSINKI_ALT);
+
+                // Save voyages with cascade persist for locations (only if they don't already exist)
+                if (voyageRepository.find(HONGKONG_TO_NEW_YORK.voyageNumber()) == null) {
+                    voyageRepository.store(HONGKONG_TO_NEW_YORK);
+                }
+                if (voyageRepository.find(NEW_YORK_TO_DALLAS.voyageNumber()) == null) {
+                    voyageRepository.store(NEW_YORK_TO_DALLAS);
+                }
+                if (voyageRepository.find(DALLAS_TO_HELSINKI.voyageNumber()) == null) {
+                    voyageRepository.store(DALLAS_TO_HELSINKI);
+                }
+                if (voyageRepository.find(HELSINKI_TO_HONGKONG.voyageNumber()) == null) {
+                    voyageRepository.store(HELSINKI_TO_HONGKONG);
+                }
+                if (voyageRepository.find(DALLAS_TO_HELSINKI_ALT.voyageNumber()) == null) {
+                    voyageRepository.store(DALLAS_TO_HELSINKI_ALT);
+                }
 
                 RouteSpecification routeSpecification = new RouteSpecification(HONGKONG, HELSINKI, toDate("2009-03-15"));
                 TrackingId trackingId = new TrackingId("ABC123");
@@ -181,6 +196,34 @@ public class SampleDataGenerator  {
             return new Timestamp(date.atStartOfDay().toEpochSecond(ZoneOffset.UTC) * 1000 - 1000L * 60 * 60 * 24 * 100);
         } catch (DateTimeParseException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Resets the ID of an entity and all nested entities to 0 using reflection.
+     * This is needed to avoid Hibernate 7 optimistic locking issues with static entities
+     * that retain IDs across ApplicationContext refreshes.
+     */
+    private void resetEntityId(Object entity) {
+        if (entity == null) return;
+
+        try {
+            // Reset ID of the entity itself
+            java.lang.reflect.Field idField = entity.getClass().getDeclaredField("id");
+            idField.setAccessible(true);
+            idField.setLong(entity, 0);
+
+            // Reset IDs of nested entities (CarrierMovements in Voyage, Locations in CarrierMovement)
+            if (entity instanceof se.citerus.dddsample.domain.model.voyage.Voyage) {
+                se.citerus.dddsample.domain.model.voyage.Voyage voyage = (se.citerus.dddsample.domain.model.voyage.Voyage) entity;
+                for (se.citerus.dddsample.domain.model.voyage.CarrierMovement cm : voyage.schedule().carrierMovements()) {
+                    resetEntityId(cm);
+                    resetEntityId(cm.departureLocation());
+                    resetEntityId(cm.arrivalLocation());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to reset entity ID for " + entity.getClass().getSimpleName(), e);
         }
     }
 }
