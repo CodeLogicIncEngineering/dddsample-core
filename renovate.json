@@ -6,7 +6,7 @@
   ],
 
   "baseBranchPatterns": ["codelogic"],
-  "dependencyDashboardTitle": "Renovate Dashboard (codelogic)",
+  "dependencyDashboardTitle": "Renovate Dashboard (codelogic dddsample-core)",
 
   "recreateWhen": "never",
   "rebaseWhen": "never",
