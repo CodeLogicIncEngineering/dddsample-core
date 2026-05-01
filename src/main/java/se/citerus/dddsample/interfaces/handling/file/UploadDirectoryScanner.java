@@ -45,10 +45,14 @@ public class UploadDirectoryScanner extends TimerTask implements InitializingBea
     this.applicationEvents = applicationEvents;
   }
 
-  @SuppressWarnings("ConstantConditions")
   @Override
   public void run() {
-    for (File file : uploadDirectory.listFiles()) {
+    File[] files = uploadDirectory.listFiles();
+    if (files == null) {
+      logger.warn("Upload directory is not accessible or is not a directory: {}", uploadDirectory);
+      return;
+    }
+    for (File file : files) {
       try {
         parse(file);
         delete(file);
@@ -91,6 +95,7 @@ public class UploadDirectoryScanner extends TimerTask implements InitializingBea
     Files.write(
             new File(parseFailureDirectory, filename).toPath(),
             rejectedLines,
+            StandardOpenOption.CREATE,
             StandardOpenOption.APPEND);
   }
 

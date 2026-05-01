@@ -1,6 +1,6 @@
 package se.citerus.dddsample.interfaces;
 
-import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityManagerFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,7 +42,7 @@ public class InterfacesApplicationContext implements WebMvcConfigurer {
     public String parseFailureDirectory;
 
     @Autowired
-    public EntityManager entityManager;
+    public EntityManagerFactory entityManagerFactory;
 
     @Bean
     public MessageSource messageSource() {
@@ -83,7 +83,7 @@ public class InterfacesApplicationContext implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         OpenEntityManagerInViewInterceptor openSessionInViewInterceptor = new OpenEntityManagerInViewInterceptor();
-        openSessionInViewInterceptor.setEntityManagerFactory(entityManager.getEntityManagerFactory());
+        openSessionInViewInterceptor.setEntityManagerFactory(entityManagerFactory);
         registry.addWebRequestInterceptor(openSessionInViewInterceptor);
     }
 

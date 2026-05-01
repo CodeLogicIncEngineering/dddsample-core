@@ -66,15 +66,44 @@ public class SampleDataGenerator  {
         tt.execute(new TransactionCallbackWithoutResult() {
             @Override
             protected void doInTransactionWithoutResult(TransactionStatus status) {
-                for (Location location : SampleLocations.getAll()) {
-                    locationRepository.store(location);
+                // Check if sample data already exists to avoid re-running on application context refresh
+                Cargo existingCargo = cargoRepository.find(new TrackingId("ABC123"));
+                if (existingCargo != null) {
+                    log.info("Sample data already exists, skipping data generation");
+                    return;
                 }
 
-                voyageRepository.store(HONGKONG_TO_NEW_YORK);
-                voyageRepository.store(NEW_YORK_TO_DALLAS);
-                voyageRepository.store(DALLAS_TO_HELSINKI);
-                voyageRepository.store(HELSINKI_TO_HONGKONG);
-                voyageRepository.store(DALLAS_TO_HELSINKI_ALT);
+                // First, persist all unique locations to avoid cascade persist duplicates
+                for (Location location : SampleLocations.getAll()) {
+                    if (locationRepository.find(location.unLocode()) == null) {
+                        resetLocationId(location);
+                        locationRepository.store(location);
+                    }
+                }
+
+                // Reset IDs of voyages and carrier movements (not locations, as they're already persisted)
+                resetVoyageAndCarrierMovementIds(HONGKONG_TO_NEW_YORK);
+                resetVoyageAndCarrierMovementIds(NEW_YORK_TO_DALLAS);
+                resetVoyageAndCarrierMovementIds(DALLAS_TO_HELSINKI);
+                resetVoyageAndCarrierMovementIds(HELSINKI_TO_HONGKONG);
+                resetVoyageAndCarrierMovementIds(DALLAS_TO_HELSINKI_ALT);
+
+                // Save voyages (locations already persisted)
+                if (voyageRepository.find(HONGKONG_TO_NEW_YORK.voyageNumber()) == null) {
+                    voyageRepository.store(HONGKONG_TO_NEW_YORK);
+                }
+                if (voyageRepository.find(NEW_YORK_TO_DALLAS.voyageNumber()) == null) {
+                    voyageRepository.store(NEW_YORK_TO_DALLAS);
+                }
+                if (voyageRepository.find(DALLAS_TO_HELSINKI.voyageNumber()) == null) {
+                    voyageRepository.store(DALLAS_TO_HELSINKI);
+                }
+                if (voyageRepository.find(HELSINKI_TO_HONGKONG.voyageNumber()) == null) {
+                    voyageRepository.store(HELSINKI_TO_HONGKONG);
+                }
+                if (voyageRepository.find(DALLAS_TO_HELSINKI_ALT.voyageNumber()) == null) {
+                    voyageRepository.store(DALLAS_TO_HELSINKI_ALT);
+                }
 
                 RouteSpecification routeSpecification = new RouteSpecification(HONGKONG, HELSINKI, toDate("2009-03-15"));
                 TrackingId trackingId = new TrackingId("ABC123");
@@ -175,6 +204,48 @@ public class SampleDataGenerator  {
             return new Timestamp(date.atStartOfDay().toEpochSecond(ZoneOffset.UTC) * 1000 - 1000L * 60 * 60 * 24 * 100);
         } catch (DateTimeParseException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Resets the ID of a Location entity to 0 using reflection.
+     * This is needed to avoid Hibernate 7 optimistic locking issues with static entities
+     * that retain IDs across ApplicationContext refreshes.
+     */
+    private void resetLocationId(Location location) {
+        if (location == null) return;
+
+        try {
+            java.lang.reflect.Field idField = location.getClass().getDeclaredField("id");
+            idField.setAccessible(true);
+            idField.setLong(location, 0);
+        } catch (Exception e) {
+            log.warn("Failed to reset Location ID", e);
+        }
+    }
+
+    /**
+     * Resets the IDs of a Voyage and its CarrierMovements (but NOT Locations) to 0 using reflection.
+     * This is needed to avoid Hibernate 7 optimistic locking issues with static entities.
+     * Locations are NOT reset as they should already be persisted separately.
+     */
+    private void resetVoyageAndCarrierMovementIds(se.citerus.dddsample.domain.model.voyage.Voyage voyage) {
+        if (voyage == null) return;
+
+        try {
+            // Reset Voyage ID
+            java.lang.reflect.Field idField = voyage.getClass().getDeclaredField("id");
+            idField.setAccessible(true);
+            idField.setLong(voyage, 0);
+
+            // Reset CarrierMovement IDs (but NOT Location IDs)
+            for (se.citerus.dddsample.domain.model.voyage.CarrierMovement cm : voyage.schedule().carrierMovements()) {
+                java.lang.reflect.Field cmIdField = cm.getClass().getDeclaredField("id");
+                cmIdField.setAccessible(true);
+                cmIdField.setLong(cm, 0);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to reset Voyage and CarrierMovement IDs", e);
         }
     }
 }
